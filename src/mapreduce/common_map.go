@@ -1,7 +1,11 @@
 package mapreduce
 
 import (
+	"encoding/json"
 	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"os"
 )
 
 // doMap does the job of a map worker: it reads one of the input files
@@ -40,6 +44,47 @@ func doMap(
 	//     err := enc.Encode(&kv)
 	//
 	// Remember to close the file after you have written all the values!
+
+	/*****************************************************************************
+	* Added by Dcmrlee.
+	*
+	* 1. Read contents from task's input file (not consider large file)
+	* 2. Run MapF using file contents
+	* 3. Generate intermediate file
+	*****************************************************************************/
+
+	debug("Entering doMap - [jobName: %s] - [mapTaskNum: %d] - [inFile: %s] - [nReduce: %d]\n", jobName, mapTaskNumber, inFile, nReduce)
+
+	contents, err := ioutil.ReadFile(inFile)
+	if err != nil {
+		log.Fatal("mapTaskNum: ", mapTaskNumber, "inFile: ", inFile, "error: ", err)
+	}
+	debug("Finish Reading inFile\n")
+
+	mapResult := mapF(inFile, string(contents))
+	mapResultSize := len(mapResult)
+	debug("Map Result Size: %d\n", mapResultSize)
+
+	for i := 0; i < nReduce; i++ {
+		intermediateFileName := reduceName(jobName, mapTaskNumber, i)
+		debug("intermediateFileName: %s\n", intermediateFileName)
+		interFile, err := os.Create(intermediateFileName)
+		if err != nil {
+			log.Fatal("Failed to Create intermediate File: ", intermediateFileName)
+		}
+		enc := json.NewEncoder(interFile)
+		for j := 0; j < mapResultSize; j++ {
+			kv := mapResult[j]
+			if ihash(kv.Key)%uint32(nReduce) == uint32(i) {
+				err := enc.Encode(&kv)
+				if err != nil {
+					interFile.Close()
+					log.Fatal("Encode error: ", err, "kv: ", kv)
+				}
+			}
+		}
+		interFile.Close()
+	}
 }
 
 func ihash(s string) uint32 {

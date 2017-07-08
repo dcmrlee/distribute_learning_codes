@@ -1,6 +1,7 @@
 package mapreduce
 
 import "fmt"
+import "sync"
 
 // schedule starts and waits for all tasks in the given phase (Map or Reduce).
 func (mr *Master) schedule(phase jobPhase) {
@@ -24,5 +25,41 @@ func (mr *Master) schedule(phase jobPhase) {
 	//
 	// TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
 	//
+
+	/*
+		1. 从channel获取worker
+		2. 通过worker进行rpc调用, `Worker.DoTask`,
+		3. 若rpc调用执行失败, 则将任务重新塞入registerChannel执行
+		ps: 使用WaitGroup保证线程同步
+	*/
+
+	var wg sync.WaitGroup
+	for i := 0; i < ntasks; i++ {
+		wg.Add(1)
+		go func(taskNum int, nios int, phase jobPhase) {
+			debug("DEBUG: current taskNum: %v, nios: %v, phase: %v\n", taskNum, nios, phase)
+			defer wg.Done()
+			for {
+				worker := <-mr.registerChannel
+				debug("DEBUG: current worker port: %v\n", worker)
+
+				var args DoTaskArgs
+				args.JobName = mr.jobName
+				args.File = mr.files[taskNum]
+				args.Phase = phase
+				args.TaskNumber = taskNum
+				args.NumOtherPhase = nios
+
+				ok := call(worker, "Worker.DoTask", &args, new(struct{}))
+				if ok {
+					go func() {
+						mr.registerChannel <- worker
+					}()
+					break
+				}
+			}
+		}(i, nios, phase)
+	}
+	wg.Wait()
 	fmt.Printf("Schedule: %v phase done\n", phase)
 }
